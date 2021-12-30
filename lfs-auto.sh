@@ -14,6 +14,10 @@ reset="\e[0m"
 sources="https://www.linuxfromscratch.org/lfs/view/stable/wget-list"
 sourcesmd5="https://www.linuxfromscratch.org/lfs/view/stable/md5sums"
 
+saveprogress() {
+	echo "$tmp" > ./savefile.lfs
+}
+
 programcheck() {
 	MYSH=$(readlink -f /bin/sh)
 	echo $MYSH | grep -q bash || echo "ERROR: /bin/sh does not point to bash"
@@ -201,6 +205,542 @@ formatdisk() {
 	fi
 }
 
+buildtmpbinutilspass1() {
+	tmp="buildtmpbinutilspass1"
+	saveprogress
+	
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling binutils (Pass 1)...$reset"
+	cd binutils-2.37
+	mkdir build && cd build
+	../configure --prefix=$LFS/tools \
+	             --with-sysroot=$LFS \
+	             --target=$LFS_TGT   \
+	             --disable-nls       \
+	             --disable-werror 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make install -j1 1>/dev/null || failbuild
+	cd ../..
+
+	buildtmpgccpass1
+}
+
+buildtmpgccpass1() {
+	tmp="buildtmpgccpass1"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling GCC (Pass 1)...$reset"
+	cd gcc-11.2.0
+	tar -xf ../mpfr-4.1.0.tar.xz 1>/dev/null
+	mv -v mpfr-4.1.0 mpfr
+	tar -xf ../gmp-6.2.1.tar.xz 1>/dev/null
+	mv -v gmp-6.2.1 gmp
+	tar -xf ../mpc-1.2.1.tar.gz 1>/dev/null
+	mv -v mpc-1.2.1 mpc
+	case $(uname -m) in
+	  x86_64)
+	    sed -e '/m64=/s/lib64/lib/' \
+	        -i.orig gcc/config/i386/t-linux64
+	 ;;
+	esac
+	mkdir build && cd build
+	../configure                                       \
+	    --target=$LFS_TGT                              \
+	    --prefix=$LFS/tools                            \
+	    --with-glibc-version=2.11                      \
+	    --with-sysroot=$LFS                            \
+	    --with-newlib                                  \
+	    --without-headers                              \
+	    --enable-initfini-array                        \
+	    --disable-nls                                  \
+	    --disable-shared                               \
+	    --disable-multilib                             \
+	    --disable-decimal-float                        \
+	    --disable-threads                              \
+	    --disable-libatomic                            \
+	    --disable-libgomp                              \
+	    --disable-libquadmath                          \
+	    --disable-libssp                               \
+	    --disable-libvtv                               \
+	    --disable-libstdcxx                            \
+	    --enable-languages=c,c++ 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make install 1>/dev/null || failbuild
+
+	cd ..
+	cat gcc/limitx.h gcc/glimits.h gcc/limity.h > \
+	  `dirname $($LFS_TGT-gcc -print-libgcc-file-name)`/install-tools/include/limits.h
+	cd ..
+
+	buildtmpapiheaders
+}
+
+buildtmpapiheaders() {
+	tmp="buildtmpapiheaders"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Linux API Headers...$reset"
+	cd linux-5.13.12
+	make mrproper 1>/dev/null || failbuild
+	make headers 1>/dev/null || failbuild
+	find usr/include -name '.*' -delete 1>/dev/null || failbuild
+	rm usr/include/Makefile
+	cp -rv usr/include $LFS/usr
+	cd ..
+
+	buildtmpglibc
+}
+
+buildtmpglibc() {
+	tmp="buildtmpglibc"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Glibc...$reset"
+	cd glibc-2.34
+	case $(uname -m) in
+	    i?86)   ln -sfv ld-linux.so.2 $LFS/lib/ld-lsb.so.3 1>/dev/null || failbuild
+	    ;;
+	    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64 1>/dev/null || failbuild
+	            ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64/ld-lsb-x86-64.so.3 1>/dev/null || failbuild
+	    ;;
+	esac
+	patch -Np1 -i ../glibc-2.34-fhs-1.patch 1>/dev/null || failbuild
+	mkdir build && cd build
+	echo "rootsbindir=/usr/sbin" > configparms
+	../configure                             \
+	      --prefix=/usr                      \
+	      --host=$LFS_TGT                    \
+	      --build=$(../scripts/config.guess) \
+	      --enable-kernel=3.2                \
+	      --with-headers=$LFS/usr/include    \
+	      libc_cv_slibdir=/usr/lib 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install
+	sed '/RTLDLIST=/s@/usr@@g' -i $LFS/usr/bin/ldd
+
+	echo 'int main(){}' > dummy.c
+	$LFS_TGT-gcc dummy.c
+	if [ $(readelf -l a.out | grep '/ld-linux') = "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]" |
+		$(readelf -l a.out | grep '/ld-linux') = "[Requesting program interpreter: /lib/ld-linux.so.2]" ]; then
+		failbuild
+	fi
+	$LFS/tools/libexec/gcc/$LFS_TGT/11.2.0/install-tools/mkheaders
+	cd ..
+
+	buildtmplibstdcc
+}
+
+buildtmplibstdcc() {
+	tmp="buildtmplibstdcc"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Libstdc++...$reset"
+	cd gcc-11.2.0
+	rm -rf build
+	mkdir build && cd build
+	../libstdc++-v3/configure           \
+	    --host=$LFS_TGT                 \
+	    --build=$(../config.guess)      \
+	    --prefix=/usr                   \
+	    --disable-multilib              \
+	    --disable-nls                   \
+	    --disable-libstdcxx-pch         \
+	    --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/11.2.0 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ../..
+
+	buildtmpm4
+}
+
+buildtmpm4() {
+	tmp="buildtmpm4"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling M4...$reset"
+	cd m4-1.4.19
+	./configure --prefix=/usr   \
+	        --host=$LFS_TGT \
+	        --build=$(build-aux/config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpncurses
+}
+
+buildtmpncurses() {
+	tmp="buildtmpncurses()"
+	saveprogress
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling NCurses...$reset"
+	cd ncurses-6.2
+	sed -i s/mawk// configure
+	mkdir build
+	pushd build
+	../configure 1>/dev/null || failbuild
+	make -C include 1>/dev/null || failbuild
+	make -C progs tic 1>/dev/null || failbuild
+	popd
+	./configure --prefix=/usr                \
+	        --host=$LFS_TGT              \
+	        --build=$(./config.guess)    \
+	        --mandir=/usr/share/man      \
+	        --with-manpage-format=normal \
+	        --with-shared                \
+	        --without-debug              \
+	        --without-ada                \
+	        --without-normal             \
+	        --enable-widec 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS TIC_PATH=$(pwd)/build/progs/tic install 1>/dev/null || failbuild
+	echo "INPUT(-lncursesw)" > $LFS/usr/lib/libncurses.so
+	cd ..
+
+	buildtmpbash
+}
+
+buildtmpbash() {
+	tmp="buildtmpbash"
+	saveprogress
+	
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Bash...$reset"
+	cd bash-5.1.8
+	./configure --prefix=/usr                   \
+            --build=$(support/config.guess) \
+            --host=$LFS_TGT                 \
+            --without-bash-malloc 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	ln -sv bash $LFS/bin/sh
+	cd ..
+
+	buildtmpcoreutils
+}
+
+buildtmpcoreutils() {
+	tmp="buildtmpcoreutils"
+	saveprogress
+	
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Coreutils...$reset"
+	cd coreutils-8.32
+	./configure --prefix=/usr                     \
+            --host=$LFS_TGT                   \
+            --build=$(build-aux/config.guess) \
+            --enable-install-program=hostname \
+            --enable-no-install-program=kill,uptime 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	mv -v $LFS/usr/bin/chroot $LFS/usr/sbin
+	mkdir -pv $LFS/usr/share/man/man8
+	mv -v $LFS/usr/share/man/man1/chroot.1 $LFS/usr/share/man/man8/chroot.8
+	sed -i 's/"1"/"8"/' $LFS/usr/share/man/man8/chroot.8
+	cd ..
+
+	buildtmpdiffutils
+}
+
+buildtmpdiffutils() {
+	tmp="buildtmpdiffutils"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Diffutils...$reset"
+	cd diffutils-3.8
+	./configure --prefix=/usr --host=$LFS_TGT 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpfile
+}
+
+buildtmpfile() {
+	tmp="buildtmpfile"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling File...$reset"
+	cd file-5.40
+	mkdir build
+	pushd build
+	../configure --disable-bzlib      \
+	             --disable-libseccomp \
+	             --disable-xzlib      \
+	             --disable-zlib 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	popd
+	./configure --prefix=/usr --host=$LFS_TGT --build=$(./config.guess) 1>/dev/null || failbuild
+	make FILE_COMPILE=$(pwd)/build/src/file 1>/dev/null || failbuild
+	make DESTDIR=$LFS install
+	cd ..
+}
+
+biuldtmpfindutils() {
+	tmp="buildtmpfindutils"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Findutils...$reset"
+	cd findutils-4.8.0
+	./configure --prefix=/usr                   \
+            --localstatedir=/var/lib/locate \
+            --host=$LFS_TGT                 \
+            --build=$(build-aux/config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpgawk
+}
+
+buildtmpgawk() {
+	tmp="buildtmpgawk"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Gawk...$reset"
+	cd gawk-5.1.0
+	sed -i 's/extras//' Makefile.in
+	./configure --prefix=/usr   \
+            --host=$LFS_TGT \
+            --build=$(./config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpgrep
+}
+
+buildtmpgrep() {
+	tmp="buildtmpgrep"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Grep...$reset"
+	cd grep-3.7
+	./configure --prefix=/usr   \
+            --host=$LFS_TGT 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpgzip
+}
+
+buildtmpgzip() {
+	tmp="buildtmpgzip"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Gzip...$reset"
+	cd gzip-1.10
+	./configure --prefix=/usr --host=$LFS_TGT 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpmake
+}
+
+buildtmpmake() {
+	tmp="buildtmpmake"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Make...$reset"
+	cd make-4.3
+	./configure --prefix=/usr   \
+            --without-guile \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmppatch
+}
+
+buildtmppatch() {
+	tmp="buildtmppatch"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Patch...$reset"
+	cd patch-2.7.6
+	./configure --prefix=/usr   \
+            --host=$LFS_TGT \
+            --build=$(build-aux/config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpsed
+}
+
+buildtmpsed() {
+	tmp="buildtmpsed"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Sed...$reset"
+	cd sed-4.8
+	./configure --prefix=/usr   \
+            --host=$LFS_TGT 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmptar
+}
+
+buildtmptar() {
+	tmp="buildtmptar"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Tar...$reset"
+	cd tar-1.34
+	./configure --prefix=/usr                     \
+            --host=$LFS_TGT                   \
+            --build=$(build-aux/config.guess) 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	cd ..
+
+	buildtmpxz
+}
+
+buildtmpxz() {
+	tmp="buildtmpxz"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Xz...$reset"
+	cd xz-5.2.5
+	./configure --prefix=/usr                     \
+            --host=$LFS_TGT                   \
+            --build=$(build-aux/config.guess) \
+            --disable-static                  \
+            --docdir=/usr/share/doc/xz-5.2.5 1>/dev/null || failbuild
+	make 1>/dev/null
+	make DESTDIR=$LFS install 1>/dev/null
+	cd ..
+
+	buildtmpbinutilspass2
+}
+
+buildtmpbinutilspass2() {
+	tmp="buildtmpbinutilspass2"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling Binutils (Pass 2)...$reset"
+	cd binutils-2.37
+	rm -rf build
+	mkdir build && cd build
+	../configure                   \
+    	--prefix=/usr              \
+    	--build=$(../config.guess) \
+    	--host=$LFS_TGT            \
+    	--disable-nls              \
+    	--enable-shared            \
+    	--disable-werror           \
+    	--enable-64-bit-bfd 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install -j1 1>/dev/null || failbuild
+	install -vm755 libctf/.libs/libctf.so.0.0.0 $LFS/usr/lib 1>/dev/null || failbuild
+	cd ../..
+
+	buildtmpgccpass2
+}
+
+buildtmpgccpass2() {
+	tmp="buildtmpgccpass2"
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Compiling GCC (Pass 2)...$reset"
+	cd gcc-11.2.0
+	case $(uname -m) in
+	  x86_64)
+	    sed -e '/m64=/s/lib64/lib/' -i.orig gcc/config/i386/t-linux64
+	  ;;
+	esac
+	rm -rf build
+	mkdir build && cd build
+	mkdir -pv $LFS_TGT/libgcc
+	ln -s ../../../libgcc/gthr-posix.h $LFS_TGT/libgcc/gthr-default.h 1>/dev/null || failbuild
+	../configure                                       \
+    --build=$(../config.guess)                     \
+    --host=$LFS_TGT                                \
+    --prefix=/usr                                  \
+    CC_FOR_TARGET=$LFS_TGT-gcc                     \
+    --with-build-sysroot=$LFS                      \
+    --enable-initfini-array                        \
+    --disable-nls                                  \
+    --disable-multilib                             \
+    --disable-decimal-float                        \
+    --disable-libatomic                            \
+    --disable-libgomp                              \
+    --disable-libquadmath                          \
+    --disable-libssp                               \
+    --disable-libvtv                               \
+    --disable-libstdcxx                            \
+    --enable-languages=c,c++ 1>/dev/null || failbuild
+	make 1>/dev/null || failbuild
+	make DESTDIR=$LFS install 1>/dev/null || failbuild
+	ln -sv gcc $LFS/usr/bin/cc 1>/dev/null || failbuild
+
+	cd ..
+}
+
+preparevkfs() {
+	tmp="preparevkfs"
+	savefile
+	
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Preparing Virtual Kernel File Systems...$reset"
+	mkdir -pv $LFS/{dev,proc,sys,run}
+	mknod -m 600 $LFS/dev/console c 5 1
+	mknod -m 666 $LFS/dev/null c 1 3
+	mount -v --bind /dev $LFS/dev
+
+	mount -v --bind /dev/pts $LFS/dev/pts
+	mount -vt proc proc $LFS/proc
+	mount -vt sysfs sysfs $LFS/sys
+	mount -vt tmpfs tmpfs $LFS/run
+
+	if [ -h $LFS/dev/shm ]; then
+		mkdir -pv $LFS/$(readlink $LFS/dev/shm)
+	fi
+}
+
+enterchroot() {
+	tmp="enterchroot"
+	saveprogress
+	
+	echo ""
+	echo -e "$bold$green[!]$reset$green Ready to chroot!$reset"
+	echo -e "$bold$blue[*]$reset$blue Stage 2 was copied into $LFS, so when you enter chroot you only need to run $bold/lfs-stage2.sh$reset$bold.$reset"
+	echo -e "$bold$blue[*]$reset$blue The script will then continue to build packages required for the system$reset"
+	echo -e "$bold$blue[*]$reset$blue Entering chroot in 5 seconds...$reset"
+	sleep 5
+	chroot "$LFS" /usr/bin/env -i   \
+    	HOME=/root                  \
+    	TERM="$TERM"                \
+    	PS1='(lfs chroot) \u:\w\$ ' \
+    	PATH=/usr/bin:/usr/sbin     \
+    	/bin/bash --login +h
+}
+
 echo " _     ______ _____    ___  _   _ _____ _____ _____ _____ ______ ___________ _____"
 echo "| |    |  ___/  ___|  / _ \\| | | |_   _|  _  /  ___/  __ \\| ___ \_   _| ___ \\_   _|"
 echo "| |    | |_  \ \`--.  / /_\ \ | | | | | | | | \\ \`--.| /  \\/| |_/ / | | | |_/ / | |"
@@ -210,6 +750,12 @@ echo "\_____/\_|   \____/  \_| |_/\___/  \_/  \___/\____/ \____/\_| \_|\___/\_| 
 echo "					    "
 echo -e "		By $bold@a5tra$reset		    "
 echo ""
+echo "$bold$green[*] The script autosaves after every operation, so you can resume anytime.$reset"
+
+if [ -f ./savefile.lfs ]; then
+	tmp=$(<savefile.lfs)
+	$tmp
+fi
 
 echo -e "$bold$blue[*]$reset$blue Checking for required programs...$reset"
 echo ""
@@ -313,6 +859,11 @@ echo ""
 echo -e "$bold$blue[*]$reset$blue Final preparations...$reset"
 echo ""
 
+chown -R root:root $LFS/{usr,lib,var,etc,bin,sbin,tools}
+case $(uname -m) in
+  x86_64) chown -R root:root $LFS/lib64 ;;
+esac
+
 if [ ! -e /etc/bash.bashrc ]; then mv -v /etc/bash.bashrc /etc/bash.bashrc.NOUSE; movedbashrc="y"; fi
 
 askcores
@@ -346,119 +897,7 @@ echo ""
 cd $LFS/sources
 tar xpvf \*.{xz,gz}
 
-echo ""
-echo -e "$bold$blue[*]$reset$blue Compiling binutils (Pass 1)...$reset"
-cd binutils-2.37
-mkdir build && cd build
-../configure --prefix=$LFS/tools \
-             --with-sysroot=$LFS \
-             --target=$LFS_TGT   \
-             --disable-nls       \
-             --disable-werror 1>/dev/null || failbuild
-make 1>/dev/null || failbuild
-make install -j1 1>/dev/null || failbuild
-cd ../..
+buildtmpbinutilspass1
+preparevkfs
 
-echo ""
-echo -e "$bold$blue[*]$reset$blue Compiling GCC (Pass 1)...$reset"
-cd gcc-11.2.0
-tar -xf ../mpfr-4.1.0.tar.xz 1>/dev/null
-mv -v mpfr-4.1.0 mpfr
-tar -xf ../gmp-6.2.1.tar.xz 1>/dev/null
-mv -v gmp-6.2.1 gmp
-tar -xf ../mpc-1.2.1.tar.gz 1>/dev/null
-mv -v mpc-1.2.1 mpc
-case $(uname -m) in
-  x86_64)
-    sed -e '/m64=/s/lib64/lib/' \
-        -i.orig gcc/config/i386/t-linux64
- ;;
-esac
-mkdir build && cd build
-../configure                                       \
-    --target=$LFS_TGT                              \
-    --prefix=$LFS/tools                            \
-    --with-glibc-version=2.11                      \
-    --with-sysroot=$LFS                            \
-    --with-newlib                                  \
-    --without-headers                              \
-    --enable-initfini-array                        \
-    --disable-nls                                  \
-    --disable-shared                               \
-    --disable-multilib                             \
-    --disable-decimal-float                        \
-    --disable-threads                              \
-    --disable-libatomic                            \
-    --disable-libgomp                              \
-    --disable-libquadmath                          \
-    --disable-libssp                               \
-    --disable-libvtv                               \
-    --disable-libstdcxx                            \
-    --enable-languages=c,c++ 1>/dev/null || failbuild
-make 1>/dev/null || failbuild
-make install 1>/dev/null || failbuild
-
-cd ..
-cat gcc/limitx.h gcc/glimits.h gcc/limity.h > \
-  `dirname $($LFS_TGT-gcc -print-libgcc-file-name)`/install-tools/include/limits.h
-cd ..
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Compiling Linux API Headers...$reset"
-cd linux-5.13.12
-make mrproper 1>/dev/null || failbuild
-make headers 1>/dev/null || failbuild
-find usr/include -name '.*' -delete 1>/dev/null || failbuild
-rm usr/include/Makefile
-cp -rv usr/include $LFS/usr
-cd ..
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Compiling Glibc...$reset"
-cd glibc-2.34
-case $(uname -m) in
-    i?86)   ln -sfv ld-linux.so.2 $LFS/lib/ld-lsb.so.3 1>/dev/null || failbuild
-    ;;
-    x86_64) ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64 1>/dev/null || failbuild
-            ln -sfv ../lib/ld-linux-x86-64.so.2 $LFS/lib64/ld-lsb-x86-64.so.3 1>/dev/null || failbuild
-    ;;
-esac
-patch -Np1 -i ../glibc-2.34-fhs-1.patch 1>/dev/null || failbuild
-mkdir build && cd build
-echo "rootsbindir=/usr/sbin" > configparms
-../configure                             \
-      --prefix=/usr                      \
-      --host=$LFS_TGT                    \
-      --build=$(../scripts/config.guess) \
-      --enable-kernel=3.2                \
-      --with-headers=$LFS/usr/include    \
-      libc_cv_slibdir=/usr/lib 1>/dev/null || failbuild
-make 1>/dev/null || failbuild
-make DESTDIR=$LFS install
-sed '/RTLDLIST=/s@/usr@@g' -i $LFS/usr/bin/ldd
-
-echo 'int main(){}' > dummy.c
-$LFS_TGT-gcc dummy.c
-if [ $(readelf -l a.out | grep '/ld-linux') = "[Requesting program interpreter: /lib64/ld-linux-x86-64.so.2]" |
-	$(readelf -l a.out | grep '/ld-linux') = "[Requesting program interpreter: /lib/ld-linux.so.2]" ]; then
-	failbuild
-fi
-$LFS/tools/libexec/gcc/$LFS_TGT/11.2.0/install-tools/mkheaders
-cd ..
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Compiling Libstdc++...$reset"
-cd gcc-11.2.0
-rm -rf build
-mkdir build && cd build
-../libstdc++-v3/configure           \
-    --host=$LFS_TGT                 \
-    --build=$(../config.guess)      \
-    --prefix=/usr                   \
-    --disable-multilib              \
-    --disable-nls                   \
-    --disable-libstdcxx-pch         \
-    --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/11.2.0 1>/dev/null || failbuild
-
-make 1>/dev/null || failbuild
-make DESTDIR=$LFS install 1>/dev/null || failbuild
+enterchroot # Enter the Matrix...
