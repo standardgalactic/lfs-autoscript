@@ -79,15 +79,12 @@ askcorrectpart() {
 	echo ""
 	read -p "Is this information correct? (Y/n)" tmp
 
-	tmp=$(echo "$tmp" | tr '[:upper:]' '[:lower:]')
-	echo $tmp
-	if ! [ -z "$tmp" ]; then
-		if ! [ "$tmp" = "y" ]; then
-			askbootsize
-			askswap
-			askrootsize
-			askcorrectpart
-		fi
+	partcorrect=$(echo "$tmp" | tr '[:upper:]' '[:lower:]')
+	if ! [ -z "$tmp" ] && ! [ $(echo "$tmp" | tr '[:upper:]' '[:lower:]') = "y" ]; then
+		askbootsize
+		askswap
+		askrootsize
+		askcorrectpart	
 	fi
 }
 
@@ -205,13 +202,20 @@ formatdisk() {
 	fi
 }
 
+extractsources() {
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Extracting files...$reset"
+	echo ""
+	cd $LFS/sources
+	tar xpvf \*.{xz,gz}
+}
+
 buildtmpbinutilspass1() {
-	tmp="buildtmpbinutilspass1"
 	saveprogress
 	
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling binutils (Pass 1)...$reset"
-	cd binutils-2.37
+	cd $LFS/sources/binutils-2.37
 	mkdir build && cd build
 	../configure --prefix=$LFS/tools \
 	             --with-sysroot=$LFS \
@@ -220,18 +224,14 @@ buildtmpbinutilspass1() {
 	             --disable-werror 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make install -j1 1>/dev/null || failbuild
-	cd ../..
-
-	buildtmpgccpass1
 }
 
 buildtmpgccpass1() {
-	tmp="buildtmpgccpass1"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling GCC (Pass 1)...$reset"
-	cd gcc-11.2.0
+	cd $LFS/sources/gcc-11.2.0
 	tar -xf ../mpfr-4.1.0.tar.xz 1>/dev/null
 	mv -v mpfr-4.1.0 mpfr
 	tar -xf ../gmp-6.2.1.tar.xz 1>/dev/null
@@ -271,35 +271,27 @@ buildtmpgccpass1() {
 	cd ..
 	cat gcc/limitx.h gcc/glimits.h gcc/limity.h > \
 	  `dirname $($LFS_TGT-gcc -print-libgcc-file-name)`/install-tools/include/limits.h
-	cd ..
-
-	buildtmpapiheaders
 }
 
 buildtmpapiheaders() {
-	tmp="buildtmpapiheaders"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Linux API Headers...$reset"
-	cd linux-5.13.12
+	cd $LFS/sources/linux-5.13.12
 	make mrproper 1>/dev/null || failbuild
 	make headers 1>/dev/null || failbuild
 	find usr/include -name '.*' -delete 1>/dev/null || failbuild
 	rm usr/include/Makefile
 	cp -rv usr/include $LFS/usr
-	cd ..
-
-	buildtmpglibc
 }
 
 buildtmpglibc() {
-	tmp="buildtmpglibc"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Glibc...$reset"
-	cd glibc-2.34
+	cd $LFS/sources/glibc-2.34
 	case $(uname -m) in
 	    i?86)   ln -sfv ld-linux.so.2 $LFS/lib/ld-lsb.so.3 1>/dev/null || failbuild
 	    ;;
@@ -328,18 +320,14 @@ buildtmpglibc() {
 		failbuild
 	fi
 	$LFS/tools/libexec/gcc/$LFS_TGT/11.2.0/install-tools/mkheaders
-	cd ..
-
-	buildtmplibstdcc
 }
 
 buildtmplibstdcc() {
-	tmp="buildtmplibstdcc"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Libstdc++...$reset"
-	cd gcc-11.2.0
+	cd $LFS/sources/gcc-11.2.0
 	rm -rf build
 	mkdir build && cd build
 	../libstdc++-v3/configure           \
@@ -352,34 +340,27 @@ buildtmplibstdcc() {
 	    --with-gxx-include-dir=/tools/$LFS_TGT/include/c++/11.2.0 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ../..
-
-	buildtmpm4
 }
 
 buildtmpm4() {
-	tmp="buildtmpm4"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling M4...$reset"
-	cd m4-1.4.19
+	cd $LFS/sources/m4-1.4.19
 	./configure --prefix=/usr   \
 	        --host=$LFS_TGT \
 	        --build=$(build-aux/config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpncurses
 }
 
 buildtmpncurses() {
-	tmp="buildtmpncurses()"
 	saveprogress
+
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling NCurses...$reset"
-	cd ncurses-6.2
+	cd $LFS/sources/ncurses-6.2
 	sed -i s/mawk// configure
 	mkdir build
 	pushd build
@@ -400,18 +381,14 @@ buildtmpncurses() {
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS TIC_PATH=$(pwd)/build/progs/tic install 1>/dev/null || failbuild
 	echo "INPUT(-lncursesw)" > $LFS/usr/lib/libncurses.so
-	cd ..
-
-	buildtmpbash
 }
 
 buildtmpbash() {
-	tmp="buildtmpbash"
 	saveprogress
 	
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Bash...$reset"
-	cd bash-5.1.8
+	cd $LFS/sources/bash-5.1.8
 	./configure --prefix=/usr                   \
             --build=$(support/config.guess) \
             --host=$LFS_TGT                 \
@@ -419,18 +396,14 @@ buildtmpbash() {
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
 	ln -sv bash $LFS/bin/sh
-	cd ..
-
-	buildtmpcoreutils
 }
 
 buildtmpcoreutils() {
-	tmp="buildtmpcoreutils"
 	saveprogress
 	
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Coreutils...$reset"
-	cd coreutils-8.32
+	cd $LFS/sources/coreutils-8.32
 	./configure --prefix=/usr                     \
             --host=$LFS_TGT                   \
             --build=$(build-aux/config.guess) \
@@ -442,33 +415,25 @@ buildtmpcoreutils() {
 	mkdir -pv $LFS/usr/share/man/man8
 	mv -v $LFS/usr/share/man/man1/chroot.1 $LFS/usr/share/man/man8/chroot.8
 	sed -i 's/"1"/"8"/' $LFS/usr/share/man/man8/chroot.8
-	cd ..
-
-	buildtmpdiffutils
 }
 
 buildtmpdiffutils() {
-	tmp="buildtmpdiffutils"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Diffutils...$reset"
-	cd diffutils-3.8
+	cd $LFS/sources/diffutils-3.8
 	./configure --prefix=/usr --host=$LFS_TGT 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpfile
 }
 
 buildtmpfile() {
-	tmp="buildtmpfile"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling File...$reset"
-	cd file-5.40
+	cd $LFS/sources/file-5.40
 	mkdir build
 	pushd build
 	../configure --disable-bzlib      \
@@ -480,151 +445,117 @@ buildtmpfile() {
 	./configure --prefix=/usr --host=$LFS_TGT --build=$(./config.guess) 1>/dev/null || failbuild
 	make FILE_COMPILE=$(pwd)/build/src/file 1>/dev/null || failbuild
 	make DESTDIR=$LFS install
-	cd ..
 }
 
-biuldtmpfindutils() {
-	tmp="buildtmpfindutils"
+buildtmpfindutils() {
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Findutils...$reset"
-	cd findutils-4.8.0
+	cd $LFS/sources/findutils-4.8.0
 	./configure --prefix=/usr                   \
             --localstatedir=/var/lib/locate \
             --host=$LFS_TGT                 \
             --build=$(build-aux/config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpgawk
 }
 
 buildtmpgawk() {
-	tmp="buildtmpgawk"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Gawk...$reset"
-	cd gawk-5.1.0
+	cd $LFS/sources/gawk-5.1.0
 	sed -i 's/extras//' Makefile.in
 	./configure --prefix=/usr   \
             --host=$LFS_TGT \
             --build=$(./config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpgrep
 }
 
 buildtmpgrep() {
-	tmp="buildtmpgrep"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Grep...$reset"
-	cd grep-3.7
+	cd $LFS/sources/grep-3.7
 	./configure --prefix=/usr   \
             --host=$LFS_TGT 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpgzip
 }
 
 buildtmpgzip() {
-	tmp="buildtmpgzip"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Gzip...$reset"
-	cd gzip-1.10
+	cd $LFS/sources/gzip-1.10
 	./configure --prefix=/usr --host=$LFS_TGT 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpmake
 }
 
 buildtmpmake() {
-	tmp="buildtmpmake"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Make...$reset"
-	cd make-4.3
+	cd $LFS/sources/make-4.3
 	./configure --prefix=/usr   \
             --without-guile \
             --host=$LFS_TGT \
             --build=$(build-aux/config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmppatch
 }
 
 buildtmppatch() {
-	tmp="buildtmppatch"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Patch...$reset"
-	cd patch-2.7.6
+	cd $LFS/sources/patch-2.7.6
 	./configure --prefix=/usr   \
             --host=$LFS_TGT \
             --build=$(build-aux/config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpsed
 }
 
 buildtmpsed() {
-	tmp="buildtmpsed"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Sed...$reset"
-	cd sed-4.8
+	cd $LFS/sources/sed-4.8
 	./configure --prefix=/usr   \
             --host=$LFS_TGT 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmptar
 }
 
 buildtmptar() {
-	tmp="buildtmptar"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Tar...$reset"
-	cd tar-1.34
+	cd $LFS/sources/tar-1.34
 	./configure --prefix=/usr                     \
             --host=$LFS_TGT                   \
             --build=$(build-aux/config.guess) 1>/dev/null || failbuild
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
-	cd ..
-
-	buildtmpxz
 }
 
 buildtmpxz() {
-	tmp="buildtmpxz"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Xz...$reset"
-	cd xz-5.2.5
+	cd $LFS/sources/xz-5.2.5
 	./configure --prefix=/usr                     \
             --host=$LFS_TGT                   \
             --build=$(build-aux/config.guess) \
@@ -632,18 +563,14 @@ buildtmpxz() {
             --docdir=/usr/share/doc/xz-5.2.5 1>/dev/null || failbuild
 	make 1>/dev/null
 	make DESTDIR=$LFS install 1>/dev/null
-	cd ..
-
-	buildtmpbinutilspass2
 }
 
 buildtmpbinutilspass2() {
-	tmp="buildtmpbinutilspass2"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling Binutils (Pass 2)...$reset"
-	cd binutils-2.37
+	cd $LFS/sources/binutils-2.37
 	rm -rf build
 	mkdir build && cd build
 	../configure                   \
@@ -657,18 +584,14 @@ buildtmpbinutilspass2() {
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install -j1 1>/dev/null || failbuild
 	install -vm755 libctf/.libs/libctf.so.0.0.0 $LFS/usr/lib 1>/dev/null || failbuild
-	cd ../..
-
-	buildtmpgccpass2
 }
 
 buildtmpgccpass2() {
-	tmp="buildtmpgccpass2"
 	saveprogress
 
 	echo ""
 	echo -e "$bold$blue[*]$reset$blue Compiling GCC (Pass 2)...$reset"
-	cd gcc-11.2.0
+	cd $LFS/sources/gcc-11.2.0
 	case $(uname -m) in
 	  x86_64)
 	    sed -e '/m64=/s/lib64/lib/' -i.orig gcc/config/i386/t-linux64
@@ -698,8 +621,101 @@ buildtmpgccpass2() {
 	make 1>/dev/null || failbuild
 	make DESTDIR=$LFS install 1>/dev/null || failbuild
 	ln -sv gcc $LFS/usr/bin/cc 1>/dev/null || failbuild
+}
 
-	cd ..
+downloadsources() {
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Downloading sources...$reset"
+	echo ""
+	mkdir -v $LFS/sources
+	mkdir -v $LFS/tools
+	chmod -v a+wt $LFS/sources
+
+	mkdir -pv $LFS/{etc,var} $LFS/usr/{bin,lib,sbin}
+
+	for i in bin lib sbin; do
+		ln -sv usr/$i $LFS/$i
+	done
+
+	case $(uname -m) in
+	  x86_64) mkdir -pv $LFS/lib64 ;;
+	esac
+
+	chown -v $(whoami) $LFS/{usr{,/*},lib,var,etc,bin,sbin,tools}
+	case $(uname -m) in
+	  x86_64) chown -v $(whoami) $LFS/lib64 ;;
+	esac
+
+	wget $sources 1>/dev/null || faildownload
+	wget $sourcesmd5 1>/dev/null || faildownload
+
+	wget -i wget-list --continue --directory-prefix=$LFS/sources
+
+	echo "3518fa864fe8d7ef65be4960f380b03b	binutils-2.37-upstream_fix-1.patch" >> $LFS/sources/md5sums
+	echo "6a5ac7e89b791aae556de0f745916f7f	bzip2-1.0.8-install_docs-1.patch" >> $LFS/sources/md5sums
+	echo "cd8ebed2a67fff2e231026df91af6776	coreutils-8.32-i18n-1.patch" >> $LFS/sources/md5sums
+	echo "9a5997c3452909b1769918c759eff8a2	glibc-2.34-fhs-1.patch" >> $LFS/sources/md5sums
+	echo "f75cca16a38da6caa7d52151f7136895	kbd-2.4.0-backspace-1.patch" >> $LFS/sources/md5sums
+	echo "fb42558b59ed95ee00eb9f1c1c9b8056	perl-5.34.0-upstream_fixes-1.patch" >> $LFS/sources/md5sums
+	echo "4900322141d493e74020c9cf437b2cdc	sysvinit-2.99-consolidated-1.patch" >> $LFS/sources/md5sums
+
+	echo -e "$bold$blue[*]$reset$blue Downloading patches...$reset"
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/binutils-2.37-upstream_fix-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/bzip2-1.0.8-install_docs-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/coreutils-8.32-i18n-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/glibc-2.34-fhs-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/kbd-2.4.0-backspace-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/perl-5.34.0-upstream_fixes-1.patch --directory-prefix=$LFS/sources
+	wget https://www.linuxfromscratch.org/patches/lfs/11.0/sysvinit-2.99-consolidated-1.patch --directory-prefix=$LFS/sources
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Validating downloaded files...$reset"
+	echo ""
+	pushd $LFS/sources
+	md5sum -c md5sums
+	popd
+}
+
+finaprep() {
+	saveprogress
+
+	echo ""
+	echo -e "$bold$blue[*]$reset$blue Final preparations...$reset"
+	echo ""
+
+	chown -R root:root $LFS/{usr,lib,var,etc,bin,sbin,tools}
+	case $(uname -m) in
+	  x86_64) chown -R root:root $LFS/lib64 ;;
+	esac
+
+	if [ ! -e /etc/bash.bashrc ]; then mv -v /etc/bash.bashrc /etc/bash.bashrc.NOUSE; movedbashrc="y"; fi
+
+	askcores
+	export MAKEOPTS="-j$cores"
+
+	echo -e "$bold$green[ ]$reset$green Backing up ~/.bashrc to ~/.bashrc.bak$reset"
+	echo -e "$bold$green[ ]$reset$green Backing up ~/.bash_profile to ~/.bash_profile.bak$reset"
+	mv -v ~/.bashrc ~/.bashrc.bak
+	mv -v ~/.bash_profile ~/.bash_profile.bak
+
+	echo "exec env -i HOME=$HOME TERM=$TERM PS1='\u:\w\$ ' /bin/bash" > ~/.bash_profile
+
+	echo "set +h" > ~/.bashrc
+	echo "umask 022" >> ~/.bashrc
+	echo "LFS=$LFS" >> ~/.bashrc
+	echo "LC_ALL=POSIX" >> ~/.bashrc
+	echo "LFS_TGT=$(uname -m)-lfs-linux-gnu" >> ~/.bashrc
+	echo "PATH=/usr/bin" >> ~/.bashrc
+	echo "if [ ! -L /bin ]; then PATH=/bin:$PATH; fi" >> ~/.bashrc
+	echo "PATH=$LFS/tools/bin:$PATH" >> ~/.bashrc
+	echo "CONFIG_SITE=$LFS/usr/share/config.site" >> ~/.bashrc
+	echo "export LFS LC_ALL LFS_TGT PATH CONFIG_SITE" >> ~/.bashrc
+
+	source ~/.bash_profile
+
+	if [ "$movedbashrc" = "y" ]; then  mv -v /etc/bash.bashrc.NOUSE /etc/bash.bashrc; fi
 }
 
 preparevkfs() {
@@ -767,11 +783,10 @@ echo -e "$bold$blue[*]$reset$blue Partition sizes are in MB$reset"
 echo ""
 read -p "Disk Block (sdX): " diskblock
 
-askbootsize
-askswap
-askrootsize
-askcorrectpart
-
+tmp="askbootsize"; askbootsize
+tmp="askswap"; askswap
+tmp="askrootsize"; askrootsize
+tmp="askcorrectpart"; askcorrectpart
 
 echo -e "$bold$red[!]$reset$blue This will destroy all data on your disk!$reset"
 read -p "Do you want to continue? (y/N) " tmp
@@ -786,14 +801,7 @@ fi
 echo ""
 echo -e "$bold$blue[*]$reset$blue Mounting the filesystem...$reset"
 echo ""
-read -p "Mountpoint (Default: /mnt/lfs): " tmp
-mountpoint=$(echo "$tmp" | tr '[:upper:]' '[:lower:]')
-if [ -z $mountpoint ]; then
-	mountpoint="/mnt/lfs"
-fi
-export LFS=$mountpoint
-echo -e "$bold$green[ ]$green Mountpoint set to $LFS$reset"
-echo ""
+export LFS=/mnt/lfs
 
 mkdir -pv $LFS
 if [ "$doswap" = "y" ]; then
@@ -804,100 +812,35 @@ fi
 mkdir -pv $LFS/boot
 mount -v /dev/${diskblock}1 $LFS/boot 1>/dev/null || failmount
 
-echo ""
-echo -e "$bold$blue[*]$reset$blue Downloading sources...$reset"
-echo ""
-mkdir -v $LFS/sources
-mkdir -v $LFS/tools
-chmod -v a+wt $LFS/sources
+tmp="downloadsources"; downloadsources
 
-mkdir -pv $LFS/{etc,var} $LFS/usr/{bin,lib,sbin}
+tmp="finaprep"; finaprep
 
-for i in bin lib sbin; do
-	ln -sv usr/$i $LFS/$i
-done
+tmp="extractsources"; extractsources
 
-case $(uname -m) in
-  x86_64) mkdir -pv $LFS/lib64 ;;
-esac
+tmp="buildtmpbinutilspass1"; buildtmpbinutilspass1
+tmp="buildtmpgccpass1"; buildtmpgccpass1
+tmp="buildtmpapiheaders"; buildtmpapiheaders
+tmp="buildtmpglibc"; buildtmpglibc
+tmp="buildtmplibstdcc"; buildtmplibstdcc
+tmp="buildtmpm4"; buildtmpm4
+tmp="buildtmpncurses"; buildtmpm4
+tmp="buildtmpbash"; buildtmpbash
+tmp="buildtmpcoreutils"; buildtmpcoreutils
+tmp="buildtmpdiffutils"; buildtmpdiffutils
+tmp="buildtmpfile"; buildtmpfile
+tmp="buildtmpfindutils"; buildtmpfindutils
+tmp="buildtmpgawk"; buildtmpgawk
+tmp="buildtmpgrep"; buildtmpgrep
+tmp="buildtmpgzip"; buildtmpgzip
+tmp="buildtmpmake"; buildtmpmake
+tmp="buildtmppatch"; buildtmppatch
+tmp="buildtmpsed"; buildtmpsed
+tmp="buildtmptar"; buildtmptar
+tmp="buildtmpxz"; buildtmpxz
+tmp="buildtmpbinutilspass2"; buildtmpbinutilspass2
+tmp="buildtmpgccpass2"; buildtmpgccpass2
 
-chown -v $(whoami) $LFS/{usr{,/*},lib,var,etc,bin,sbin,tools}
-case $(uname -m) in
-  x86_64) chown -v $(whoami) $LFS/lib64 ;;
-esac
-
-wget $sources 1>/dev/null || faildownload
-wget $sourcesmd5 1>/dev/null || faildownload
-
-wget -i wget-list --continue --directory-prefix=$LFS/sources
-
-echo "3518fa864fe8d7ef65be4960f380b03b	binutils-2.37-upstream_fix-1.patch" >> $LFS/sources/md5sums
-echo "6a5ac7e89b791aae556de0f745916f7f	bzip2-1.0.8-install_docs-1.patch" >> $LFS/sources/md5sums
-echo "cd8ebed2a67fff2e231026df91af6776	coreutils-8.32-i18n-1.patch" >> $LFS/sources/md5sums
-echo "9a5997c3452909b1769918c759eff8a2	glibc-2.34-fhs-1.patch" >> $LFS/sources/md5sums
-echo "f75cca16a38da6caa7d52151f7136895	kbd-2.4.0-backspace-1.patch" >> $LFS/sources/md5sums
-echo "fb42558b59ed95ee00eb9f1c1c9b8056	perl-5.34.0-upstream_fixes-1.patch" >> $LFS/sources/md5sums
-echo "4900322141d493e74020c9cf437b2cdc	sysvinit-2.99-consolidated-1.patch" >> $LFS/sources/md5sums
-
-echo -e "$bold$blue[*]$reset$blue Downloading patches...$reset"
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/binutils-2.37-upstream_fix-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/bzip2-1.0.8-install_docs-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/coreutils-8.32-i18n-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/glibc-2.34-fhs-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/kbd-2.4.0-backspace-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/perl-5.34.0-upstream_fixes-1.patch --directory-prefix=$LFS/sources
-wget https://www.linuxfromscratch.org/patches/lfs/11.0/sysvinit-2.99-consolidated-1.patch --directory-prefix=$LFS/sources
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Validating downloaded files...$reset"
-echo ""
-pushd $LFS/sources
-md5sum -c md5sums
-popd
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Final preparations...$reset"
-echo ""
-
-chown -R root:root $LFS/{usr,lib,var,etc,bin,sbin,tools}
-case $(uname -m) in
-  x86_64) chown -R root:root $LFS/lib64 ;;
-esac
-
-if [ ! -e /etc/bash.bashrc ]; then mv -v /etc/bash.bashrc /etc/bash.bashrc.NOUSE; movedbashrc="y"; fi
-
-askcores
-export MAKEOPTS="-j$cores"
-
-echo -e "$bold$green[ ]$reset$green Backing up ~/.bashrc to ~/.bashrc.bak$reset"
-echo -e "$bold$green[ ]$reset$green Backing up ~/.bash_profile to ~/.bash_profile.bak$reset"
-mv -v ~/.bashrc ~/.bashrc.bak
-mv -v ~/.bash_profile ~/.bash_profile.bak
-
-echo "exec env -i HOME=$HOME TERM=$TERM PS1='\u:\w\$ ' /bin/bash" > ~/.bash_profile
-
-echo "set +h" > ~/.bashrc
-echo "umask 022" >> ~/.bashrc
-echo "LFS=$LFS" >> ~/.bashrc
-echo "LC_ALL=POSIX" >> ~/.bashrc
-echo "LFS_TGT=$(uname -m)-lfs-linux-gnu" >> ~/.bashrc
-echo "PATH=/usr/bin" >> ~/.bashrc
-echo "if [ ! -L /bin ]; then PATH=/bin:$PATH; fi" >> ~/.bashrc
-echo "PATH=$LFS/tools/bin:$PATH" >> ~/.bashrc
-echo "CONFIG_SITE=$LFS/usr/share/config.site" >> ~/.bashrc
-echo "export LFS LC_ALL LFS_TGT PATH CONFIG_SITE" >> ~/.bashrc
-
-source ~/.bash_profile
-
-if [ "$movedbashrc" = "y" ]; then  mv -v /etc/bash.bashrc.NOUSE /etc/bash.bashrc; fi
-
-echo ""
-echo -e "$bold$blue[*]$reset$blue Extracting files...$reset"
-echo ""
-cd $LFS/sources
-tar xpvf \*.{xz,gz}
-
-buildtmpbinutilspass1
-preparevkfs
+tmp="preparevkfs"; preparevkfs
 
 enterchroot # Enter the Matrix...
