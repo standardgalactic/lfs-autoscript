@@ -770,6 +770,10 @@ echo "$bold$green[*] The script autosaves after every operation, so you can resu
 
 if [ -f ./savefile.lfs ]; then
 	tmp=$(<savefile.lfs)
+	echo ""
+	read -p "Disk Block (sdX): " diskblock
+	askswap
+	mountdisk
 	$tmp
 fi
 
@@ -783,10 +787,10 @@ echo -e "$bold$blue[*]$reset$blue Partition sizes are in MB$reset"
 echo ""
 read -p "Disk Block (sdX): " diskblock
 
-tmp="askbootsize"; askbootsize
-tmp="askswap"; askswap
-tmp="askrootsize"; askrootsize
-tmp="askcorrectpart"; askcorrectpart
+askbootsize
+askswap
+askrootsize
+askcorrectpart
 
 echo -e "$bold$red[!]$reset$blue This will destroy all data on your disk!$reset"
 read -p "Do you want to continue? (y/N) " tmp
